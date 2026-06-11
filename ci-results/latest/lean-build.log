@@ -1,0 +1,14 @@
+info: pacxai_ci_self_contained: no previous manifest, creating one from scratch
+info: toolchain not updated; already up-to-date
+✔ [2/13] Built PACXAI.Core (255ms)
+✔ [3/13] Built PACXAI.Leakage.FiniteCapacity (341ms)
+✔ [4/13] Built PACXAI.Transcript (414ms)
+✔ [5/13] Built PACXAI.Recovery (407ms)
+✔ [6/13] Built PACXAI.InfoTheory.FiniteDistribution (384ms)
+✔ [7/13] Built PACXAI.InfoTheory.DPI (225ms)
+✔ [8/13] Built PACXAI.Conditioning (241ms)
+✔ [9/13] Built PACXAI.InfoTheory.FanoStyle (287ms)
+✔ [10/13] Built PACXAI.Distillation (323ms)
+✔ [11/13] Built PACXAI.PAC.MonteCarlo (352ms)
+✔ [12/13] Built PACXAI (186ms)
+Build completed successfully (13 jobs).

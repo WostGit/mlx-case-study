@@ -1,0 +1,20 @@
+[audit] forbidden token scan
+No forbidden tokens found
+[audit] theorem check
+'PACXAI.postprocess_successCount_eq' does not depend on any axioms
+'PACXAI.postprocess_successRate_eq' does not depend on any axioms
+'PACXAI.distilled_student_attack_is_transcript_attack' does not depend on any axioms
+'PACXAI.distilled_student_rate_is_transcript_rate' does not depend on any axioms
+'PACXAI.candidateBest_postprocess_eq_lifted' depends on axioms: [propext, Quot.sound]
+'PACXAI.conditional_candidateBest_postprocess_eq_lifted' depends on axioms: [propext, Quot.sound]
+'PACXAI.student_attack_lifts_to_transcript' does not depend on any axioms
+'PACXAI.student_rate_lifts_to_transcript' does not depend on any axioms
+'PACXAI.conditional_student_attack_lifts_to_transcript' does not depend on any axioms
+'PACXAI.student_candidate_best_is_transcript_candidate_best_lifted' depends on axioms: [propext, Quot.sound]
+'PACXAI.InfoTheory.deterministic_dpi_exact' does not depend on any axioms
+'PACXAI.InfoTheory.conditional_deterministic_dpi_exact' does not depend on any axioms
+'PACXAI.InfoTheory.infoGain_postprocess_exact' does not depend on any axioms
+'PACXAI.InfoTheory.fanoStyle_valid_student_to_transcript' does not depend on any axioms
+'PACXAI.InfoTheory.fanoStyle_budget_violation_lifts' does not depend on any axioms
+'PACXAI.PAC.monteCarlo_transcript_pass_implies_student_pass' does not depend on any axioms
+'PACXAI.PAC.monteCarlo_candidateClass_postprocess_eq' depends on axioms: [propext, Quot.sound]
