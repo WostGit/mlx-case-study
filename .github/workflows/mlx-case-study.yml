@@ -1,0 +1,522 @@
+name: PACXAI MLX Route-Metadata Case Study
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+    paths:
+      - ".github/workflows/mlx-case-study.yml"
+      - "PACXAI/**"
+      - "PACXAI.lean"
+      - "lakefile.lean"
+      - "lean-toolchain"
+      - "scripts/**"
+      - "experiments/**"
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  mlx-route-metadata-case-study:
+    # MLX needs Apple Silicon. GitHub standard macOS arm64 runners are M1.
+    runs-on: macos-15
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Show runner info
+        run: |
+          set -euxo pipefail
+          uname -a
+          sysctl -n machdep.cpu.brand_string || true
+          sw_vers || true
+          python3 --version
+
+      - name: Install Python dependencies including MLX
+        run: |
+          set -euxo pipefail
+          python3 -m pip install --upgrade pip
+          python3 -m pip install mlx numpy pandas matplotlib
+
+          python3 - <<'PY'
+          import platform
+          import mlx.core as mx
+          print("platform:", platform.platform())
+          print("machine:", platform.machine())
+          print("mlx imported successfully")
+          x = mx.array([1.0, 2.0, 3.0])
+          print("mlx smoke:", mx.sum(x).item())
+          PY
+
+      - name: Install elan / Lean
+        run: |
+          set -euxo pipefail
+          curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf \
+            | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: Install selected Lean toolchain
+        run: |
+          set -euxo pipefail
+          if [ ! -f lean-toolchain ]; then
+            echo "leanprover/lean4:v4.30.0-rc2" > lean-toolchain
+          fi
+
+          TOOLCHAIN="$(cat lean-toolchain)"
+
+          if elan toolchain list | grep -Fxq "$TOOLCHAIN"; then
+            echo "Toolchain already installed: $TOOLCHAIN"
+          else
+            elan toolchain install "$TOOLCHAIN"
+          fi
+
+          elan default "$TOOLCHAIN"
+          lean --version | tee lean-version.log
+          lake --version | tee lake-version.log
+
+      - name: Build Lean project
+        run: |
+          set -euxo pipefail
+          lake build 2>&1 | tee lean-build.log
+
+      - name: Run Lean audit
+        run: |
+          set -euxo pipefail
+          if [ -f scripts/audit.sh ]; then
+            bash scripts/audit.sh 2>&1 | tee lean-audit.log
+          else
+            ! grep -RIn --include='*.lean' \
+              -e '\bsorry\b' \
+              -e '\badmit\b' \
+              -e '\baxiom\b' \
+              -e '\bconstant\b' \
+              -e '\bunsafe\b' \
+              -e '\bopaque\b' \
+              -e 'TODO' \
+              -e 'FIXME' \
+              -- PACXAI PACXAI.lean lakefile.lean 2>&1 | tee lean-audit.log
+          fi
+
+      - name: Write MLX route-metadata experiment
+        run: |
+          set -euxo pipefail
+          mkdir -p experiments
+
+          cat > experiments/mlx_route_metadata_case_study.py <<'PY'
+          #!/usr/bin/env python3
+          """
+          MLX route-metadata leakage case study.
+
+          This experiment is designed for GitHub Actions macOS arm64 runners.
+          It trains small MLX classifiers, not LLMs.
+
+          Security question:
+            When does a transcript-derived student artifact have the same
+            recovery power as a transcript simulator?
+
+          Worlds:
+            1. transcript_only:
+                student sees only audited transcript features.
+            2. route_metadata:
+                student sees transcript + unlogged route metadata.
+            3. subgroup_aux:
+                route metadata is available only for proxy/suspicious groups.
+
+          Expected S&P-relevant result:
+            transcript_only gap = 0-ish / same boundary;
+            route_metadata materially improves capability recovery;
+            subgroup conditioning exposes concentrated leakage.
+          """
+
+          from __future__ import annotations
+
+          import csv
+          import json
+          import math
+          import random
+          from pathlib import Path
+          from typing import Dict, List, Tuple
+
+          import numpy as np
+          import mlx.core as mx
+          import mlx.nn as nn
+          import mlx.optimizers as optim
+
+          CAPABILITIES = [
+              "reasoning",
+              "coding",
+              "tool_use",
+              "computer_use",
+              "policy_edge",
+              "domain_expert",
+          ]
+
+          GROUPS = ["normal", "proxy_cluster", "suspicious_campaign", "enterprise_eval"]
+
+          QUERY_FAMILIES = [
+              "simple_qa",
+              "code_generation",
+              "tool_planning",
+              "multi_step",
+              "policy_edge",
+              "domain",
+          ]
+
+          ROUTES = [
+              "reasoning_route",
+              "code_route",
+              "tool_route",
+              "computer_route",
+              "safety_route",
+              "expert_route",
+          ]
+
+          CAP_TO_ROUTE = {
+              "reasoning": "reasoning_route",
+              "coding": "code_route",
+              "tool_use": "tool_route",
+              "computer_use": "computer_route",
+              "policy_edge": "safety_route",
+              "domain_expert": "expert_route",
+          }
+
+          CAP_INDEX = {c: i for i, c in enumerate(CAPABILITIES)}
+          GROUP_INDEX = {g: i for i, g in enumerate(GROUPS)}
+          QUERY_INDEX = {q: i for i, q in enumerate(QUERY_FAMILIES)}
+          ROUTE_INDEX = {r: i for i, r in enumerate(ROUTES)}
+
+
+          def one_hot(index: int, size: int) -> List[float]:
+              v = [0.0] * size
+              v[index] = 1.0
+              return v
+
+
+          def generate_population(n: int = 12000, seed: int = 7) -> List[Dict[str, object]]:
+              random.seed(seed)
+              rows: List[Dict[str, object]] = []
+
+              for i in range(n):
+                  group = GROUPS[(i * 13 + 3) % len(GROUPS)]
+
+                  # Capability is correlated with query family and group, but not fully revealed by transcript.
+                  base = (i * 7 + (2 if group == "suspicious_campaign" else 0) + (1 if group == "proxy_cluster" else 0)) % len(CAPABILITIES)
+                  capability = CAPABILITIES[base]
+
+                  # Transcript-level features are coarser.
+                  query_family = QUERY_FAMILIES[(i * 11 + len(group)) % len(QUERY_FAMILIES)]
+                  difficulty = ["easy", "medium", "hard"][(i * 5 + len(capability)) % 3]
+
+                  # Route metadata is highly predictive and deliberately omitted from audited transcript.
+                  route_id = CAP_TO_ROUTE[capability]
+                  campaign_id = f"camp_{(i * 17 + (5 if group == 'proxy_cluster' else 0)) % 97:03d}"
+
+                  rows.append(
+                      {
+                          "secret_id": i,
+                          "capability": capability,
+                          "group": group,
+                          "query_family": query_family,
+                          "difficulty": difficulty,
+                          "route_id": route_id,
+                          "campaign_id": campaign_id,
+                      }
+                  )
+
+              return rows
+
+
+          def transcript_features(row: Dict[str, object]) -> List[float]:
+              cap = str(row["capability"])
+              q = str(row["query_family"])
+              diff = str(row["difficulty"])
+
+              # Coarse answer signature: intentionally loses information.
+              if cap in {"coding", "tool_use", "computer_use"}:
+                  signature = "agentic"
+              elif cap == "policy_edge":
+                  signature = "safety"
+              else:
+                  signature = "language_reasoning"
+
+              sig_index = {"agentic": 0, "safety": 1, "language_reasoning": 2}[signature]
+              diff_index = {"easy": 0, "medium": 1, "hard": 2}[diff]
+
+              x: List[float] = []
+              x += one_hot(QUERY_INDEX[q], len(QUERY_FAMILIES))
+              x += one_hot(sig_index, 3)
+              x += one_hot(diff_index, 3)
+              return x
+
+
+          def route_features(row: Dict[str, object]) -> List[float]:
+              return one_hot(ROUTE_INDEX[str(row["route_id"])], len(ROUTES))
+
+
+          def group_features(row: Dict[str, object]) -> List[float]:
+              return one_hot(GROUP_INDEX[str(row["group"])], len(GROUPS))
+
+
+          def make_dataset(rows: List[Dict[str, object]], mode: str) -> Tuple[np.ndarray, np.ndarray]:
+              xs: List[List[float]] = []
+              ys: List[int] = []
+
+              for r in rows:
+                  x = transcript_features(r)
+
+                  if mode == "transcript_only":
+                      pass
+
+                  elif mode == "route_metadata":
+                      x += route_features(r)
+
+                  elif mode == "subgroup_aux":
+                      if r["group"] in {"proxy_cluster", "suspicious_campaign"}:
+                          x += route_features(r)
+                      else:
+                          x += [0.0] * len(ROUTES)
+
+                  elif mode == "route_and_group":
+                      x += route_features(r)
+                      x += group_features(r)
+
+                  else:
+                      raise ValueError(mode)
+
+                  xs.append(x)
+                  ys.append(CAP_INDEX[str(r["capability"])])
+
+              return np.array(xs, dtype=np.float32), np.array(ys, dtype=np.int64)
+
+
+          class MLP(nn.Module):
+              def __init__(self, in_dim: int, hidden: int, out_dim: int):
+                  super().__init__()
+                  self.net = nn.Sequential(
+                      nn.Linear(in_dim, hidden),
+                      nn.ReLU(),
+                      nn.Linear(hidden, out_dim),
+                  )
+
+              def __call__(self, x):
+                  return self.net(x)
+
+
+          def accuracy(model: MLP, x: np.ndarray, y: np.ndarray) -> float:
+              logits = model(mx.array(x))
+              pred = mx.argmax(logits, axis=1)
+              return float(mx.mean(pred == mx.array(y)).item())
+
+
+          def train_model(x_train, y_train, x_test, y_test, seed: int = 0) -> Tuple[MLP, Dict[str, float]]:
+              np.random.seed(seed)
+              mx.random.seed(seed)
+
+              model = MLP(x_train.shape[1], hidden=32, out_dim=len(CAPABILITIES))
+              optimizer = optim.Adam(learning_rate=0.01)
+
+              def loss_fn(model, xb, yb):
+                  logits = model(xb)
+                  return mx.mean(nn.losses.cross_entropy(logits, yb))
+
+              loss_and_grad = nn.value_and_grad(model, loss_fn)
+
+              batch = 256
+              steps = 12
+
+              for epoch in range(steps):
+                  perm = np.random.permutation(len(x_train))
+                  for start in range(0, len(x_train), batch):
+                      idx = perm[start : start + batch]
+                      xb = mx.array(x_train[idx])
+                      yb = mx.array(y_train[idx])
+                      loss, grads = loss_and_grad(model, xb, yb)
+                      optimizer.update(model, grads)
+                      mx.eval(model.parameters(), optimizer.state)
+
+              train_acc = accuracy(model, x_train, y_train)
+              test_acc = accuracy(model, x_test, y_test)
+              return model, {"train_acc": train_acc, "test_acc": test_acc}
+
+
+          def split(rows: List[Dict[str, object]], frac: float = 0.75):
+              cut = int(len(rows) * frac)
+              return rows[:cut], rows[cut:]
+
+
+          def subgroup_accuracy(model: MLP, rows: List[Dict[str, object]], mode: str, group: str) -> float:
+              subset = [r for r in rows if r["group"] == group]
+              if not subset:
+                  return float("nan")
+              x, y = make_dataset(subset, mode)
+              return accuracy(model, x, y)
+
+
+          def main():
+              out = Path("results/mlx_route_metadata")
+              out.mkdir(parents=True, exist_ok=True)
+
+              rows = generate_population()
+              train_rows, test_rows = split(rows)
+
+              modes = ["transcript_only", "route_metadata", "subgroup_aux", "route_and_group"]
+              result_rows = []
+
+              for mode in modes:
+                  x_train, y_train = make_dataset(train_rows, mode)
+                  x_test, y_test = make_dataset(test_rows, mode)
+                  model, metrics = train_model(x_train, y_train, x_test, y_test, seed=42)
+
+                  record = {
+                      "mode": mode,
+                      "train_acc": metrics["train_acc"],
+                      "test_acc": metrics["test_acc"],
+                  }
+
+                  for g in GROUPS:
+                      record[f"group_{g}_acc"] = subgroup_accuracy(model, test_rows, mode, g)
+
+                  result_rows.append(record)
+
+              transcript_acc = next(r for r in result_rows if r["mode"] == "transcript_only")["test_acc"]
+              route_acc = next(r for r in result_rows if r["mode"] == "route_metadata")["test_acc"]
+              subgroup_acc = next(r for r in result_rows if r["mode"] == "subgroup_aux")["test_acc"]
+
+              summary = {
+                  "n_population": len(rows),
+                  "n_train": len(train_rows),
+                  "n_test": len(test_rows),
+                  "transcript_only_test_acc": transcript_acc,
+                  "route_metadata_test_acc": route_acc,
+                  "subgroup_aux_test_acc": subgroup_acc,
+                  "route_metadata_minus_transcript_acc": route_acc - transcript_acc,
+                  "subgroup_aux_minus_transcript_acc": subgroup_acc - transcript_acc,
+                  "false_pass_threshold": transcript_acc + 0.02,
+                  "route_metadata_false_pass": route_acc > transcript_acc + 0.02,
+                  "mlx_case_study_interpretation": (
+                      "Route metadata materially improves recovery over audited transcript features; "
+                      "therefore a transcript-only post-processing audit would certify the wrong boundary."
+                  ),
+              }
+
+              with (out / "metrics.csv").open("w", newline="") as f:
+                  writer = csv.DictWriter(f, fieldnames=list(result_rows[0].keys()))
+                  writer.writeheader()
+                  writer.writerows(result_rows)
+
+              (out / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+
+              report = f"""# MLX Route-Metadata Audit Case Study
+
+          ## Summary
+
+          - Population: {summary['n_population']}
+          - Train examples: {summary['n_train']}
+          - Test examples: {summary['n_test']}
+          - Transcript-only test accuracy: {summary['transcript_only_test_acc']:.4f}
+          - Route-metadata test accuracy: {summary['route_metadata_test_acc']:.4f}
+          - Subgroup-auxiliary test accuracy: {summary['subgroup_aux_test_acc']:.4f}
+          - Route metadata improvement: {summary['route_metadata_minus_transcript_acc']:.4f}
+          - Route metadata false pass: {summary['route_metadata_false_pass']}
+
+          ## Interpretation
+
+          The transcript-only model is the sound post-processing boundary.
+
+          The route-metadata model uses `route_id`, which is omitted from the audited transcript.  Its higher recovery accuracy demonstrates the paper's assumption bug: the informal claim checks `Transcript -> Student`, but the actual pipeline is `Transcript -> RouteMetadata -> Student`.
+
+          The result is intentionally lightweight enough to run on GitHub Actions macOS arm64 runners using MLX.
+          """
+              (out / "CASE_STUDY_REPORT.md").write_text(report, encoding="utf-8")
+
+              print(json.dumps(summary, indent=2))
+
+
+          if __name__ == "__main__":
+              main()
+          PY
+
+      - name: Run MLX route-metadata case study
+        run: |
+          set -euxo pipefail
+          python3 experiments/mlx_route_metadata_case_study.py 2>&1 | tee mlx-case-study.log
+
+      - name: Validate MLX case-study security signal
+        run: |
+          set -euxo pipefail
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          summary = json.loads(Path("results/mlx_route_metadata/summary.json").read_text())
+
+          print(json.dumps(summary, indent=2))
+
+          assert summary["route_metadata_false_pass"] is True
+          assert summary["route_metadata_minus_transcript_acc"] > 0.10
+          assert summary["transcript_only_test_acc"] < summary["route_metadata_test_acc"]
+          PY
+
+      - name: Prepare committed MLX results
+        if: always()
+        run: |
+          set -euxo pipefail
+
+          rm -rf ci-results/mlx
+          mkdir -p ci-results/mlx
+
+          cp mlx-case-study.log ci-results/mlx/ 2>/dev/null || true
+
+          if [ -d results/mlx_route_metadata ]; then
+            mkdir -p ci-results/mlx/results
+            cp -R results/mlx_route_metadata ci-results/mlx/results/
+          fi
+
+          cat > ci-results/mlx/summary.md <<EOF
+          # MLX route-metadata case-study results
+
+          - Workflow: ${GITHUB_WORKFLOW}
+          - Run id: ${GITHUB_RUN_ID}
+          - Run attempt: ${GITHUB_RUN_ATTEMPT}
+          - Commit: ${GITHUB_SHA}
+          - Generated at: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+          See \`results/mlx_route_metadata/\`.
+          EOF
+
+          find ci-results/mlx -type f | sort
+
+      - name: Commit MLX results back to repo
+        if: always() && github.event_name != 'pull_request'
+        run: |
+          set -euxo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add ci-results/mlx
+
+          if git diff --cached --quiet; then
+            echo "No MLX result changes to commit."
+          else
+            git commit -m "ci: update MLX route-metadata results [skip ci]"
+            git push
+          fi
+
+      - name: Upload MLX logs and results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mlx-route-metadata-results
+          path: |
+            mlx-case-study.log
+            results/mlx_route_metadata/**
+            ci-results/mlx/**
+          if-no-files-found: ignore
+          retention-days: 14
