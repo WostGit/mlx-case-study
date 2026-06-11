@@ -1,0 +1,60 @@
+{
+  "n": 10000,
+  "transcript_success": 2500,
+  "transcript_simulator_success": 2500,
+  "route_metadata_success": 10000,
+  "subgroup_aux_success": 6667,
+  "deterministic_student_minus_transcript_simulator_success": 0,
+  "route_metadata_student_minus_transcript_simulator_success": 7500,
+  "subgroup_aux_student_minus_transcript_simulator_success": 4167,
+  "candidate_best_student": 2500,
+  "candidate_best_lifted_transcript": 2500,
+  "candidate_best_gap": 0,
+  "code_cost_student": 32505,
+  "code_cost_pullback": 32505,
+  "code_cost_gap": 0,
+  "fano_student_valid": true,
+  "fano_transcript_valid": true,
+  "monte_carlo_budget": 2700,
+  "monte_carlo_transcript_pass": true,
+  "monte_carlo_student_pass": true,
+  "route_metadata_false_pass_under_transcript_audit": true,
+  "conditional": {
+    "normal": {
+      "total": 2500,
+      "deterministic_student_success": 0,
+      "transcript_simulator_success": 0,
+      "deterministic_gap": 0,
+      "subgroup_aux_success": 0,
+      "subgroup_aux_rate": 0.0,
+      "transcript_rate": 0.0
+    },
+    "proxy_cluster": {
+      "total": 2500,
+      "deterministic_student_success": 833,
+      "transcript_simulator_success": 833,
+      "deterministic_gap": 0,
+      "subgroup_aux_success": 2500,
+      "subgroup_aux_rate": 1.0,
+      "transcript_rate": 0.3332
+    },
+    "suspicious_campaign": {
+      "total": 2500,
+      "deterministic_student_success": 0,
+      "transcript_simulator_success": 0,
+      "deterministic_gap": 0,
+      "subgroup_aux_success": 2500,
+      "subgroup_aux_rate": 1.0,
+      "transcript_rate": 0.0
+    },
+    "enterprise_eval": {
+      "total": 2500,
+      "deterministic_student_success": 1667,
+      "transcript_simulator_success": 1667,
+      "deterministic_gap": 0,
+      "subgroup_aux_success": 1667,
+      "subgroup_aux_rate": 0.6668,
+      "transcript_rate": 0.6668
+    }
+  }
+}

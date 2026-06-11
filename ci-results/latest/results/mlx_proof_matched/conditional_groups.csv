@@ -1,0 +1,5 @@
+group,total,deterministic_student_success,transcript_simulator_success,deterministic_gap,subgroup_aux_success,subgroup_aux_rate,transcript_rate
+normal,2500,0,0,0,0,0.0,0.0
+proxy_cluster,2500,833,833,0,2500,1.0,0.3332
+suspicious_campaign,2500,0,0,0,2500,1.0,0.0
+enterprise_eval,2500,1667,1667,0,1667,0.6668,0.6668

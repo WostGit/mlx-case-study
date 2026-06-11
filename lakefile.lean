@@ -1,7 +1,7 @@
 import Lake
 open Lake DSL
 
-package «pacxai_ci_self_contained» where
+package «pacxai_ci_self_contained_mlx» where
   -- Mathlib-free finite recovery/privacy artifact.
 
 @[default_target]
